@@ -155,8 +155,10 @@ def create_shipment(docname, selected_service, item_data=None):
     invoice_dates = set()
     consolidated_items = defaultdict(lambda: {"weight": 0, "amount": 0})
     gst_invoices = []
+    invoice_currency = "INR"
 
     total_order_value = 0
+    seen_invoices = set()
 
     for dn in doc.get("shipment_delivery_note"):
         delivery_note = frappe.get_doc('Delivery Note', dn.delivery_note)
@@ -174,17 +176,19 @@ def create_shipment(docname, selected_service, item_data=None):
                     ewaybill_number = ""
                     ewaybill_date = ""
                 invoice_dates.add(str(invoice_date))
+                if invoice_number not in seen_invoices:
+                    seen_invoices.add(invoice_number)
+                    gst_invoices.append({
+                        "invoice_number": invoice_number,
+                        "invoice_date": str(invoice_date),
+                        "invoice_value": invoice_value,
+                        "ewaybill_number": ewaybill_number,
+                        "ewaybill_date": str(ewaybill_date)
+                    })
             item_key = (item.item_name, item.uom, item.gst_hsn_code, item.qty, item.amount)
             consolidated_items[item_key]["weight"] += item.qty if item.uom == "Kg" else 1
             consolidated_items[item_key]["amount"] += item.amount
 
-    gst_invoices.append({
-                    "invoice_number": invoice_number,
-                    "invoice_date": str(invoice_date),
-                    "invoice_value": invoice_value,
-                    "ewaybill_number": ewaybill_number,
-                    "ewaybill_date": str(ewaybill_date)
-                })
     items = [
         {
             "description": item_key[0],
@@ -384,8 +388,10 @@ def create_rule_based_shipment(docname, item_data=None):
     invoice_dates = set()
     consolidated_items = defaultdict(lambda: {"weight": 0, "amount": 0})
     gst_invoices = []
+    invoice_currency = "INR"
 
     total_order_value = 0
+    seen_invoices = set()
 
     for dn in doc.get("shipment_delivery_note"):
         delivery_note = frappe.get_doc('Delivery Note', dn.delivery_note)
@@ -403,17 +409,19 @@ def create_rule_based_shipment(docname, item_data=None):
                     ewaybill_number = ""
                     ewaybill_date = ""
                 invoice_dates.add(str(invoice_date))
+                if invoice_number not in seen_invoices:
+                    seen_invoices.add(invoice_number)
+                    gst_invoices.append({
+                        "invoice_number": invoice_number,
+                        "invoice_date": str(invoice_date),
+                        "invoice_value": invoice_value,
+                        "ewaybill_number": ewaybill_number,
+                        "ewaybill_date": str(ewaybill_date)
+                    })
             item_key = (item.item_name, item.uom, item.gst_hsn_code, item.qty, item.amount)
             consolidated_items[item_key]["weight"] += item.qty if item.uom == "Kg" else 1
             consolidated_items[item_key]["amount"] += item.amount
 
-    gst_invoices.append({
-                    "invoice_number": invoice_number,
-                    "invoice_date": str(invoice_date),
-                    "invoice_value": invoice_value,
-                    "ewaybill_number": ewaybill_number,
-                    "ewaybill_date": str(ewaybill_date)
-                })
     items = [
         {
             "description": item_key[0],
