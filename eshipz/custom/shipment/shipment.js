@@ -36,7 +36,18 @@ frappe.ui.form.on('Shipment', {
 											if (s.slug && s.slug.toLowerCase().includes('bluedart')) {
 												bluedart_service = s;
 												if (s.technicality && s.technicality.length > 0) {
-													selected_tech = s.technicality[0].service_type;
+
+													// CHANGED: Match the exact API string format for "eTailPrePaidAir"
+													let etail_service = s.technicality.find(t =>
+														t.service_type && t.service_type.toLowerCase().includes('etailprepaid')
+													);
+
+													if (etail_service) {
+														selected_tech = etail_service.service_type;
+													} else {
+														// Fallback to the first available service if E-tail isn't available for this route
+														selected_tech = s.technicality[0].service_type;
+													}
 												}
 												break;
 											}
