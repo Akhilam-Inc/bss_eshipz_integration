@@ -3,9 +3,10 @@ import frappe
 import json
 from collections import defaultdict
 from datetime import datetime
+from frappe import _
 
 @frappe.whitelist()
-def fetch_available_services(docname):
+def fetch_available_services(docname: str):
     doc = frappe.get_doc('Shipment', docname)
     
     pickup_address = frappe.get_doc('Address', doc.pickup_address_name)
@@ -20,7 +21,7 @@ def fetch_available_services(docname):
 
     api_token = frappe.db.get_single_value('eShipz Settings', 'api_token')
     if not api_token:
-        frappe.throw("API token not found in eShipz Settings")
+        frappe.throw(_("API token not found in eShipz Settings"))
 
     url = "https://app.eshipz.com/api/v2/services"
     headers = {
@@ -114,15 +115,15 @@ def fetch_available_services(docname):
             rates_list = result['data']['rates']
             if rates_list:
                 return [rate for rate in rates_list if rate.get('code') in [200, 201]]
-                    
-            frappe.throw("Failed to fetch services: " + response.text)
+
+            frappe.throw(_("Failed to fetch services: {0}").format(response.text))
         else:
-            frappe.throw("Rates key not found in API response: " + frappe.as_json(result))
+            frappe.throw(_("Rates key not found in API response: {0}").format(frappe.as_json(result)))
     else:
-        frappe.throw("Failed to fetch services: " + response.text)
+        frappe.throw(_("Failed to fetch services: {0}").format(response.text))
 
 @frappe.whitelist()
-def create_shipment(docname, selected_service, item_data=None):
+def create_shipment(docname: str, selected_service: str, item_data: str | None = None):
     doc = frappe.get_doc('Shipment', docname)
     
     selected_service = json.loads(selected_service)
@@ -141,7 +142,7 @@ def create_shipment(docname, selected_service, item_data=None):
 
     api_token = frappe.db.get_single_value('eShipz Settings', 'api_token')
     if not api_token:
-        frappe.throw("API token not found in eShipz Settings")
+        frappe.throw(_("API token not found in eShipz Settings"))
 
     url = "https://app.eshipz.com/api/v1/create-shipments"
     headers = {
@@ -348,15 +349,14 @@ def create_shipment(docname, selected_service, item_data=None):
             doc.db_set('shipment_id', shipment_id)
             doc.db_set('tracking_status_info', tracking_status_info)
             doc.db_set('carrier_service', carrier_service)
-            frappe.db.commit()
             return {"label_url": label_url, "awb_number": awb_number, "service_provider": service_provider, "tracking_status_info": tracking_status_info, "carrier_service": carrier_service, "shipment_id": shipment_id}
         else:
-            frappe.throw("Files key not found in API response: " + frappe.as_json(result))
+            frappe.throw(_("Files key not found in API response: {0}").format(frappe.as_json(result)))
     else:
-        frappe.throw("Failed to create shipment: " + response.text)
+        frappe.throw(_("Failed to create shipment: {0}").format(response.text))
 
 @frappe.whitelist()
-def create_rule_based_shipment(docname, item_data=None):
+def create_rule_based_shipment(docname: str, item_data: str | None = None):
     doc = frappe.get_doc('Shipment', docname)
     
     if item_data:
@@ -374,7 +374,7 @@ def create_rule_based_shipment(docname, item_data=None):
 
     api_token = frappe.db.get_single_value('eShipz Settings', 'api_token')
     if not api_token:
-        frappe.throw("API token not found in eShipz Settings")
+        frappe.throw(_("API token not found in eShipz Settings"))
 
     url = "https://app.eshipz.com/api/v1/create-shipments/rule-based"
     headers = {
@@ -581,20 +581,19 @@ def create_rule_based_shipment(docname, item_data=None):
             doc.db_set('shipment_id', shipment_id)
             doc.db_set('tracking_status_info', tracking_status_info)
             doc.db_set('carrier_service', carrier_service)
-            frappe.db.commit()
             return {"label_url": label_url, "awb_number": awb_number, "service_provider": service_provider, "tracking_status_info": tracking_status_info, "carrier_service": carrier_service, "shipment_id": shipment_id}
         else:
-            frappe.throw("Files key not found in API response: " + frappe.as_json(result))
+            frappe.throw(_("Files key not found in API response: {0}").format(frappe.as_json(result)))
     else:
-        frappe.throw("Failed to create shipment: " + response.text)
+        frappe.throw(_("Failed to create shipment: {0}").format(response.text))
 
 @frappe.whitelist()
-def cancel_shipment(docname):
+def cancel_shipment(docname: str):
     doc = frappe.get_doc('Shipment', docname)
-    
+
     api_token = frappe.db.get_single_value('eShipz Settings', 'api_token')
     if not api_token:
-        frappe.throw("API token not found in eShipz Settings")
+        frappe.throw(_("API token not found in eShipz Settings"))
 
     url = "https://app.eshipz.com/api/v1/cancel"
     headers = {
@@ -617,18 +616,38 @@ def cancel_shipment(docname):
         doc.db_set('service_provider', "")
         doc.db_set('tracking_status_info', "Cancelled")
         doc.db_set('carrier_service', "")
-        frappe.db.commit()
+
+        # Clear SO reference before cancelling the doc so the link is gone before docstatus flips
+        _clear_shipment_references(docname)
+
+        try:
+            fresh = frappe.get_doc("Shipment", docname)
+            if fresh.docstatus == 1:
+                fresh.cancel()
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "eShipz: ERPNext Shipment cancel failed")
     else:
-        frappe.throw("Failed to create shipment: " + response.text)
+        frappe.throw(_("Failed to cancel shipment: {0}").format(response.text))
+
+
+def _clear_shipment_references(shipment_name: str) -> None:
+    """Clear custom_shipment_reference on every Sales Order that references this shipment.
+    Single query — no N+1."""
+    frappe.db.set_value(
+        "Sales Order",
+        {"custom_shipment_reference": shipment_name},
+        "custom_shipment_reference",
+        None,
+    )
 
 @frappe.whitelist()
-def update_status(docname):
+def update_status(docname: str):
 
     doc = frappe.get_doc('Shipment', docname)
 
     api_token = frappe.db.get_single_value('eShipz Settings', 'api_token')
     if not api_token:
-        frappe.throw("API token not found in eShipz Settings")
+        frappe.throw(_("API token not found in eShipz Settings"))
 
     url = "https://app.eshipz.com/api/v2/trackings"
     headers = {
@@ -645,14 +664,14 @@ def update_status(docname):
     if response.status_code == 200:
         result = response.json()
         if not result:
-            frappe.throw("API response is empty")
+            frappe.throw(_("API response is empty"))
 
         if not isinstance(result, list):
-            frappe.throw("API response format is not a list: " + frappe.as_json(result))
+            frappe.throw(_("API response format is not a list: {0}").format(frappe.as_json(result)))
 
         tracking_data = result[0] if result else None
         if not tracking_data or 'checkpoints' not in tracking_data:
-            frappe.throw("Invalid tracking data format: " + frappe.as_json(result))
+            frappe.throw(_("Invalid tracking data format: {0}").format(frappe.as_json(result)))
 
         checkpoints = tracking_data.get('checkpoints', [])
         delivery_date = tracking_data.get('delivery_date')
@@ -689,7 +708,6 @@ def update_status(docname):
         last_update_received = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         doc.db_set('fsl_last_update_received', last_update_received)
         doc.db_set('tracking_status_info', latest_remark)
-        frappe.db.commit()
 
         return {
             "latest_checkpoint": {
@@ -704,10 +722,10 @@ def update_status(docname):
             "tag": tag,
         }
     else:
-        frappe.throw("Failed to retrieve shipment status: " + response.text)
+        frappe.throw(_("Failed to retrieve shipment status: {0}").format(response.text))
 
 @frappe.whitelist()
-def get_delivery_note_items(delivery_note):
+def get_delivery_note_items(delivery_note: str):
     if not frappe.has_permission('Delivery Note', 'read', delivery_note):
         raise frappe.PermissionError
     
