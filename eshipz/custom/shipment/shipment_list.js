@@ -3,7 +3,7 @@
 frappe.listview_settings['Shipment'] = {
     onload: function (listview) {
 
-        listview.page.add_actions_menu_item(__('Create & Print Label'), function () {
+        listview.page.add_button(__('Create & Print Label'), function () {
 
             let selected_items = listview.get_checked_items();
 
