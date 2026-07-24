@@ -5,6 +5,30 @@ from collections import defaultdict
 from datetime import datetime
 from frappe import _
 
+
+def _get_shopify_order_number(doc):
+    """
+    Resolve the linked Sales Order's shopify_order_number via the Shipment's
+    Delivery Note -> Delivery Note Item.against_sales_order. Always exactly one
+    Delivery Note / one Sales Order per Shipment in practice (both Shipment-
+    creation call sites in bombaysweets_customization/api.py append a single
+    shipment_delivery_note row), so the first match is used.
+    """
+    dn_names = [r.delivery_note for r in (doc.get("shipment_delivery_note") or []) if r.delivery_note]
+    if not dn_names:
+        return None
+
+    so_names = frappe.get_all(
+        "Delivery Note Item",
+        filters={"parent": ["in", dn_names], "against_sales_order": ["is", "set"]},
+        pluck="against_sales_order",
+    )
+    if not so_names:
+        return None
+
+    return frappe.db.get_value("Sales Order", so_names[0], "shopify_order_number")
+
+
 @frappe.whitelist()
 def fetch_available_services(docname: str):
     doc = frappe.get_doc('Shipment', docname)
@@ -273,7 +297,7 @@ def create_shipment(docname: str, selected_service: str, item_data: str | None =
             "unit": "KG",
             "value": charged_weight
         },
-        "customer_reference": doc.name,
+        "customer_reference": _get_shopify_order_number(doc) or doc.name,
         "invoice_number": ", ".join(invoice_numbers),
         "invoice_date": ", ".join(invoice_dates),
         "is_cod": False,
@@ -505,7 +529,7 @@ def create_rule_based_shipment(docname: str, item_data: str | None = None):
             "unit": "KG",
             "value": charged_weight
         },
-        "customer_reference": doc.name,
+        "customer_reference": _get_shopify_order_number(doc) or doc.name,
         "invoice_number": ", ".join(invoice_numbers),
         "invoice_date": ", ".join(invoice_dates),
         "is_cod": False,
