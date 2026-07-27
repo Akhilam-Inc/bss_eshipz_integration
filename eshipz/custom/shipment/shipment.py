@@ -74,7 +74,7 @@ def fetch_available_services(docname: str):
                 "is_primary": True
             },
             "ship_to": {
-                "contact_name": doc.delivery_contact_name,
+                "contact_name": delivery_address.get("custom_recipient_name") or doc.delivery_contact_name,
                 "company_name": delivery_address.address_title,
                 "street1": delivery_address.address_line1,
                 "city": delivery_address.city,
@@ -82,7 +82,7 @@ def fetch_available_services(docname: str):
                 "postal_code": delivery_address.pincode,
                 "country": delivery_country_code,
                 "type": doc.fsl_delivery_type,
-                "phone": delivery_address.phone,
+                "phone": delivery_address.get("custom_recipient_phone") or delivery_address.phone,
                 "email": delivery_address.email_id,
             },
             "return_to": {
@@ -318,14 +318,14 @@ def create_shipment(docname: str, selected_service: str, item_data: str | None =
                 "type": doc.fsl_pickup_type
             },
             "ship_to": {
-                "contact_name": doc.delivery_contact_name,
+                "contact_name": delivery_address.get("custom_recipient_name") or doc.delivery_contact_name,
                 "company_name": delivery_address.address_title,
                 "street1": delivery_address.address_line1,
                 "street2": delivery_address.address_line2,
                 "city": delivery_address.city,
                 "state": delivery_address.state,
                 "postal_code": delivery_address.pincode,
-                "phone": delivery_address.phone,
+                "phone": delivery_address.get("custom_recipient_phone") or delivery_address.phone,
                 "email": delivery_address.email_id,
                 "country": delivery_country_code,
                 "type": doc.fsl_delivery_type
@@ -550,14 +550,14 @@ def create_rule_based_shipment(docname: str, item_data: str | None = None):
                 "type": doc.fsl_pickup_type
             },
             "ship_to": {
-                "contact_name": doc.delivery_contact_name,
+                "contact_name": delivery_address.get("custom_recipient_name") or doc.delivery_contact_name,
                 "company_name": delivery_address.address_title,
                 "street1": delivery_address.address_line1,
                 "street2": delivery_address.address_line2,
                 "city": delivery_address.city,
                 "state": delivery_address.state,
                 "postal_code": delivery_address.pincode,
-                "phone": delivery_address.phone,
+                "phone": delivery_address.get("custom_recipient_phone") or delivery_address.phone,
                 "email": delivery_address.email_id,
                 "country": delivery_country_code,
                 "type": doc.fsl_delivery_type
