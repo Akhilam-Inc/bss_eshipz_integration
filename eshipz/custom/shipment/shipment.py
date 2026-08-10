@@ -1,9 +1,10 @@
-import requests
 import frappe
 import json
 from collections import defaultdict
 from datetime import datetime
 from frappe import _
+
+from eshipz.utils.request_log import record_log_error, send_logged_request
 
 
 def _get_shopify_order_number(doc):
@@ -131,7 +132,17 @@ def fetch_available_services(docname: str):
 
     json_data = json.dumps(data, separators=(',', ':'), default=lambda x: str(x).lower() if isinstance(x, bool) else x)
 
-    response = requests.post(url, headers=headers, data=json_data)
+    result_log = send_logged_request(
+        method="POST", url=url, request_description="Fetch Available Services",
+        reference_doctype="Shipment", reference_docname=docname,
+        headers=headers, data=json_data,
+    )
+    response = result_log.response
+    if response is None:
+        frappe.throw(_(
+            "Failed to fetch services — could not reach carrier. "
+            "See Integration Request {0} for details."
+        ).format(result_log.log_name))
 
     if response.status_code == 200:
         result = response.json()
@@ -140,11 +151,17 @@ def fetch_available_services(docname: str):
             if rates_list:
                 return [rate for rate in rates_list if rate.get('code') in [200, 201]]
 
-            frappe.throw(_("Failed to fetch services: {0}").format(response.text))
+            frappe.throw(_(
+                "Failed to fetch services: {0}. See Integration Request {1}."
+            ).format(response.text, result_log.log_name))
         else:
-            frappe.throw(_("Rates key not found in API response: {0}").format(frappe.as_json(result)))
+            frappe.throw(_(
+                "Rates key not found in API response: {0}. See Integration Request {1}."
+            ).format(frappe.as_json(result), result_log.log_name))
     else:
-        frappe.throw(_("Failed to fetch services: {0}").format(response.text))
+        frappe.throw(_(
+            "Failed to fetch services: {0}. See Integration Request {1}."
+        ).format(response.text, result_log.log_name))
 
 @frappe.whitelist()
 def create_shipment(docname: str, selected_service: str, item_data: str | None = None):
@@ -353,31 +370,58 @@ def create_shipment(docname: str, selected_service: str, item_data: str | None =
 
     json_data = json.dumps(data, separators=(',', ':'), default=lambda x: str(x).lower() if isinstance(x, bool) else x)
 
-    response = requests.post(url, headers=headers, data=json_data)
+    result_log = send_logged_request(
+        method="POST", url=url, request_description="Create Shipment",
+        reference_doctype="Shipment", reference_docname=docname,
+        headers=headers, data=json_data,
+    )
+    response = result_log.response
+    if response is None:
+        frappe.throw(_(
+            "Failed to create shipment — could not reach carrier. "
+            "See Integration Request {0} for details."
+        ).format(result_log.log_name))
 
-    if response.status_code == 200:
-        result = response.json()
-        if 'files' in result['data']:
-            label_url = result['data']['files']['label']['label_meta']['url']
-            awb_number = result['data']['files']['label']['label_meta']['awb']
-            service_provider = result['data']['slug']
-            tracking_status_info = result['data']['status']
-            carrier_service = result['data']['service_type']
-            shipment_id = result['data']['order_id']
+    if response.status_code != 200:
+        frappe.throw(_(
+            "Failed to create shipment: {0}. See Integration Request {1}."
+        ).format(response.text, result_log.log_name))
 
-            doc.db_set('tracking_url', label_url)
-            doc.db_set('awb_number', awb_number)
-            doc.db_set('status', "Booked")
-            doc.db_set('tracking_status', "In Progress")
-            doc.db_set('service_provider', service_provider)
-            doc.db_set('shipment_id', shipment_id)
-            doc.db_set('tracking_status_info', tracking_status_info)
-            doc.db_set('carrier_service', carrier_service)
-            return {"label_url": label_url, "awb_number": awb_number, "service_provider": service_provider, "tracking_status_info": tracking_status_info, "carrier_service": carrier_service, "shipment_id": shipment_id}
-        else:
-            frappe.throw(_("Files key not found in API response: {0}").format(frappe.as_json(result)))
-    else:
-        frappe.throw(_("Failed to create shipment: {0}").format(response.text))
+    result = response.json()
+    try:
+        if 'files' not in result['data']:
+            raise KeyError('data.files')
+        label_url = result['data']['files']['label']['label_meta']['url']
+        awb_number = result['data']['files']['label']['label_meta']['awb']
+        service_provider = result['data']['slug']
+        tracking_status_info = result['data']['status']
+        carrier_service = result['data']['service_type']
+        shipment_id = result['data']['order_id']
+    except (KeyError, TypeError, ValueError) as exc:
+        record_log_error(result_log.log_name, f"Unexpected response shape from carrier: {exc}")
+        frappe.throw(_(
+            "Shipment booking response could not be parsed — the carrier's reply was in an "
+            "unexpected format. The booking may have succeeded on the carrier's side even "
+            "though this could not be confirmed automatically. See Integration Request {0} "
+            "for the full raw response before re-attempting booking."
+        ).format(result_log.log_name))
+
+    doc.db_set('tracking_url', label_url)
+    doc.db_set('awb_number', awb_number)
+    doc.db_set('status', "Booked")
+    doc.db_set('tracking_status', "In Progress")
+    doc.db_set('service_provider', service_provider)
+    doc.db_set('shipment_id', shipment_id)
+    doc.db_set('tracking_status_info', tracking_status_info)
+    doc.db_set('carrier_service', carrier_service)
+    return {
+        "label_url": label_url,
+        "awb_number": awb_number,
+        "service_provider": service_provider,
+        "tracking_status_info": tracking_status_info,
+        "carrier_service": carrier_service,
+        "shipment_id": shipment_id,
+    }
 
 @frappe.whitelist()
 def create_rule_based_shipment(docname: str, item_data: str | None = None):
@@ -585,31 +629,58 @@ def create_rule_based_shipment(docname: str, item_data: str | None = None):
 
     json_data = json.dumps(data, separators=(',', ':'), default=lambda x: str(x).lower() if isinstance(x, bool) else x)
 
-    response = requests.post(url, headers=headers, data=json_data)
+    result_log = send_logged_request(
+        method="POST", url=url, request_description="Create Rule-Based Shipment",
+        reference_doctype="Shipment", reference_docname=docname,
+        headers=headers, data=json_data,
+    )
+    response = result_log.response
+    if response is None:
+        frappe.throw(_(
+            "Failed to create shipment — could not reach carrier. "
+            "See Integration Request {0} for details."
+        ).format(result_log.log_name))
 
-    if response.status_code == 200:
-        result = response.json()
-        if 'files' in result['data']:
-            label_url = result['data']['files']['label']['label_meta']['url']
-            awb_number = result['data']['files']['label']['label_meta']['awb']
-            service_provider = result['data']['slug']
-            tracking_status_info = result['data']['status']
-            carrier_service = result['data']['service_type']
-            shipment_id = result['data']['order_id']
+    if response.status_code != 200:
+        frappe.throw(_(
+            "Failed to create shipment: {0}. See Integration Request {1}."
+        ).format(response.text, result_log.log_name))
 
-            doc.db_set('tracking_url', label_url)
-            doc.db_set('awb_number', awb_number)
-            doc.db_set('status', "Booked")
-            doc.db_set('tracking_status', "In Progress")
-            doc.db_set('service_provider', service_provider)
-            doc.db_set('shipment_id', shipment_id)
-            doc.db_set('tracking_status_info', tracking_status_info)
-            doc.db_set('carrier_service', carrier_service)
-            return {"label_url": label_url, "awb_number": awb_number, "service_provider": service_provider, "tracking_status_info": tracking_status_info, "carrier_service": carrier_service, "shipment_id": shipment_id}
-        else:
-            frappe.throw(_("Files key not found in API response: {0}").format(frappe.as_json(result)))
-    else:
-        frappe.throw(_("Failed to create shipment: {0}").format(response.text))
+    result = response.json()
+    try:
+        if 'files' not in result['data']:
+            raise KeyError('data.files')
+        label_url = result['data']['files']['label']['label_meta']['url']
+        awb_number = result['data']['files']['label']['label_meta']['awb']
+        service_provider = result['data']['slug']
+        tracking_status_info = result['data']['status']
+        carrier_service = result['data']['service_type']
+        shipment_id = result['data']['order_id']
+    except (KeyError, TypeError, ValueError) as exc:
+        record_log_error(result_log.log_name, f"Unexpected response shape from carrier: {exc}")
+        frappe.throw(_(
+            "Shipment booking response could not be parsed — the carrier's reply was in an "
+            "unexpected format. The booking may have succeeded on the carrier's side even "
+            "though this could not be confirmed automatically. See Integration Request {0} "
+            "for the full raw response before re-attempting booking."
+        ).format(result_log.log_name))
+
+    doc.db_set('tracking_url', label_url)
+    doc.db_set('awb_number', awb_number)
+    doc.db_set('status', "Booked")
+    doc.db_set('tracking_status', "In Progress")
+    doc.db_set('service_provider', service_provider)
+    doc.db_set('shipment_id', shipment_id)
+    doc.db_set('tracking_status_info', tracking_status_info)
+    doc.db_set('carrier_service', carrier_service)
+    return {
+        "label_url": label_url,
+        "awb_number": awb_number,
+        "service_provider": service_provider,
+        "tracking_status_info": tracking_status_info,
+        "carrier_service": carrier_service,
+        "shipment_id": shipment_id,
+    }
 
 @frappe.whitelist()
 def cancel_shipment(docname: str):
@@ -631,7 +702,17 @@ def cancel_shipment(docname: str):
             ]
     }
 
-    response = requests.post(url, headers=headers, json=data)
+    result_log = send_logged_request(
+        method="POST", url=url, request_description="Cancel Shipment",
+        reference_doctype="Shipment", reference_docname=docname,
+        headers=headers, json_body=data,
+    )
+    response = result_log.response
+    if response is None:
+        frappe.throw(_(
+            "Failed to cancel shipment — could not reach carrier. "
+            "See Integration Request {0} for details."
+        ).format(result_log.log_name))
 
     if response.status_code == 200:
         doc.db_set('tracking_url', "")
@@ -651,7 +732,9 @@ def cancel_shipment(docname: str):
         except Exception:
             frappe.log_error(frappe.get_traceback(), "eShipz: ERPNext Shipment cancel failed")
     else:
-        frappe.throw(_("Failed to cancel shipment: {0}").format(response.text))
+        frappe.throw(_(
+            "Failed to cancel shipment: {0}. See Integration Request {1}."
+        ).format(response.text, result_log.log_name))
 
 
 def _clear_shipment_references(shipment_name: str) -> None:
@@ -683,19 +766,35 @@ def update_status(docname: str):
         "track_id": doc.awb_number
     }
 
-    response = requests.post(url, headers=headers, json=data)
+    result_log = send_logged_request(
+        method="POST", url=url, request_description="Update Tracking Status",
+        reference_doctype="Shipment", reference_docname=docname,
+        headers=headers, json_body=data,
+    )
+    response = result_log.response
+    if response is None:
+        frappe.throw(_(
+            "Failed to retrieve shipment status — could not reach carrier. "
+            "See Integration Request {0} for details."
+        ).format(result_log.log_name))
 
     if response.status_code == 200:
         result = response.json()
         if not result:
-            frappe.throw(_("API response is empty"))
+            frappe.throw(_(
+                "API response is empty. See Integration Request {0}."
+            ).format(result_log.log_name))
 
         if not isinstance(result, list):
-            frappe.throw(_("API response format is not a list: {0}").format(frappe.as_json(result)))
+            frappe.throw(_(
+                "API response format is not a list: {0}. See Integration Request {1}."
+            ).format(frappe.as_json(result), result_log.log_name))
 
         tracking_data = result[0] if result else None
         if not tracking_data or 'checkpoints' not in tracking_data:
-            frappe.throw(_("Invalid tracking data format: {0}").format(frappe.as_json(result)))
+            frappe.throw(_(
+                "Invalid tracking data format: {0}. See Integration Request {1}."
+            ).format(frappe.as_json(result), result_log.log_name))
 
         checkpoints = tracking_data.get('checkpoints', [])
         delivery_date = tracking_data.get('delivery_date')
@@ -746,7 +845,9 @@ def update_status(docname: str):
             "tag": tag,
         }
     else:
-        frappe.throw(_("Failed to retrieve shipment status: {0}").format(response.text))
+        frappe.throw(_(
+            "Failed to retrieve shipment status: {0}. See Integration Request {1}."
+        ).format(response.text, result_log.log_name))
 
 @frappe.whitelist()
 def get_delivery_note_items(delivery_note: str):
