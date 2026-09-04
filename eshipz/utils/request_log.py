@@ -120,7 +120,18 @@ def record_log_error(
 ) -> None:
     """Flip an existing Integration Request (created by send_logged_request,
     currently status='Completed') to status='Failed' after the transport
-    succeeded but domain-level parsing of the response body then failed."""
+    succeeded but domain-level parsing of the response body then failed.
+
+    Commits immediately and mirrors the raw response into Error Log. Every
+    caller of this function follows it with frappe.throw() to surface the
+    failure to the user, but an unhandled exception from a whitelisted method
+    rolls back the whole request's DB transaction (frappe/app.py's exception
+    handler) -- which would otherwise silently erase this Integration Request
+    (its insert, its output, and this failure status) moments after writing
+    it, before anyone could ever look at the carrier's actual reply.
+    """
+    raw_output = frappe.db.get_value("Integration Request", log_name, "output")
+
     frappe.db.set_value(
         "Integration Request",
         log_name,
@@ -131,3 +142,9 @@ def record_log_error(
             ),
         },
     )
+    frappe.log_error(
+        title=f"eShipz {error_type} ({log_name})",
+        message="%s\n\nRaw response (Integration Request %s):\n%s"
+        % (error_message, log_name, raw_output),
+    )
+    frappe.db.commit()

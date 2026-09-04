@@ -886,11 +886,26 @@ def update_status(docname: str):
 
             doc.db_set('fsl_latest_location', latest_city)
 
+        new_tracking_status = None
         if tag == "Delivered":
             doc.db_set('status', "Completed")
             doc.db_set('tracking_status', "Delivered")
+            new_tracking_status = "Delivered"
         elif tag == "InTransit":
             doc.db_set('tracking_status', "In Progress")
+            new_tracking_status = "In Progress"
+
+        if new_tracking_status:
+            try:
+                from bombaysweets_customization.bombaysweets_customization.api import (
+                    sync_shipment_tracking_status_to_so,
+                )
+
+                sync_shipment_tracking_status_to_so(doc.name, new_tracking_status)
+            except Exception:
+                frappe.log_error(
+                    frappe.get_traceback(), f"eShipz update_status: SO tracking status sync failed for {doc.name}"
+                )
 
         if delivery_date:
             delivery_date_erp = datetime.strptime(delivery_date, "%a, %d %b %Y %H:%M:%S %Z").strftime("%Y-%m-%d %H:%M:%S")
