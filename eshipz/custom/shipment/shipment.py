@@ -425,10 +425,78 @@ def fetch_available_services(docname: str):
             "Failed to fetch services: {0}. See Integration Request {1}."
         ).format(response.text, result_log.log_name))
 
+REQUIRED_ADDRESS_FIELDS = [
+    ("address_line1", "street address"),
+    ("city", "city"),
+    ("state", "state"),
+    ("pincode", "postal code"),
+    ("phone", "phone number"),
+    ("country", "country"),
+]
+
+
+def get_shipment_booking_issues(doc):
+    """Return every reason eShipz would reject this Shipment's booking,
+    checked locally so a missing field surfaces as a plain sentence instead
+    of a 200-wrapped validation error our own parser can't make sense of
+    (see e.g. Integration Request 138pd5gdon: ship_from/return_to tax_id null).
+    """
+    issues = []
+
+    pickup_address = frappe.get_doc("Address", doc.pickup_address_name) if doc.pickup_address_name else None
+    delivery_address = frappe.get_doc("Address", doc.delivery_address_name) if doc.delivery_address_name else None
+
+    def check_address(address, label, need_gstin=False):
+        if not address:
+            issues.append(f"{label} address is not set")
+            return
+        for fieldname, human in REQUIRED_ADDRESS_FIELDS:
+            if not address.get(fieldname):
+                issues.append(f"{label} address ({address.name}) is missing {human}")
+        if need_gstin and not address.get("gstin"):
+            issues.append(f"{label} address ({address.name}) is missing GSTIN")
+
+    check_address(pickup_address, "Pickup", need_gstin=True)
+    check_address(delivery_address, "Delivery")
+
+    if not doc.pickup_contact_person:
+        issues.append("Pickup contact person is not set")
+    if not doc.pickup_company:
+        issues.append("Pickup company is not set")
+
+    return issues
+
+
+def ensure_shipment_ready_for_booking(doc):
+    """Hard-block a booking attempt when get_shipment_booking_issues finds
+    anything eShipz would reject, naming every problem up front."""
+    issues = get_shipment_booking_issues(doc)
+    if issues:
+        frappe.throw(
+            _("This shipment can't be booked with eShipz yet:<br>{0}").format(
+                "<br>".join("&bull; " + frappe.utils.escape_html(i) for i in issues)
+            ),
+            title=_("Missing Shipment Details"),
+        )
+
+
+def _raise_if_carrier_error(result, log_name):
+    """eShipz returns HTTP 200 even for validation failures, wrapping the
+    real error in `meta` -- surface that directly instead of falling through
+    to the generic 'response could not be parsed' path below."""
+    meta = result.get("meta") or {}
+    code = meta.get("code")
+    if meta.get("status") == "error" or (isinstance(code, int) and code >= 400):
+        frappe.throw(_(
+            "eShipz rejected this booking: {0} {1}"
+        ).format(meta.get("message") or "", " ".join(meta.get("details") or [])).strip())
+
+
 @frappe.whitelist()
 def create_shipment(docname: str, selected_service: str, item_data: str | None = None):
     doc = frappe.get_doc('Shipment', docname)
-    
+    ensure_shipment_ready_for_booking(doc)
+
     selected_service = json.loads(selected_service)
     if item_data:
         item_data = json.loads(item_data)
@@ -555,6 +623,7 @@ def create_shipment(docname: str, selected_service: str, item_data: str | None =
         ).format(response.text, result_log.log_name))
 
     result = response.json()
+    _raise_if_carrier_error(result, result_log.log_name)
     try:
         if 'files' not in result['data']:
             raise KeyError('data.files')
@@ -593,7 +662,8 @@ def create_shipment(docname: str, selected_service: str, item_data: str | None =
 @frappe.whitelist()
 def create_rule_based_shipment(docname: str, item_data: str | None = None):
     doc = frappe.get_doc('Shipment', docname)
-    
+    ensure_shipment_ready_for_booking(doc)
+
     if item_data:
         item_data = json.loads(item_data)
 
@@ -719,6 +789,7 @@ def create_rule_based_shipment(docname: str, item_data: str | None = None):
         ).format(response.text, result_log.log_name))
 
     result = response.json()
+    _raise_if_carrier_error(result, result_log.log_name)
     try:
         if 'files' not in result['data']:
             raise KeyError('data.files')
