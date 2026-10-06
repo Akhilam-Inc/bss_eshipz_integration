@@ -890,6 +890,27 @@ def _clear_shipment_references(shipment_name: str) -> None:
         None,
     )
 
+# eShipz tags in the order a shipment normally progresses through them.
+_TAG_PROGRESS = ["InfoReceived", "PickedUp", "InTransit", "OutForDelivery", "Delivered"]
+
+
+def _most_advanced_tag(tag, checkpoints):
+    """The shipment-level `tag` in the trackings response can lag behind its own
+    checkpoints (seen live: top-level "OutForDelivery" while the newest checkpoint was
+    already "Delivered"). Return the more advanced of the two, plus the checkpoint that
+    proves it. A top-level tag outside the progress list (Exception, Return, ...) is
+    never overridden. Returns (tag, checkpoint_or_None)."""
+    if tag not in _TAG_PROGRESS:
+        return tag, None
+
+    best_tag, best_checkpoint = tag, None
+    for checkpoint in checkpoints or []:
+        candidate = checkpoint.get("tag")
+        if candidate in _TAG_PROGRESS and _TAG_PROGRESS.index(candidate) > _TAG_PROGRESS.index(best_tag):
+            best_tag, best_checkpoint = candidate, checkpoint
+    return best_tag, best_checkpoint
+
+
 @frappe.whitelist()
 def update_status(docname: str):
 
@@ -943,7 +964,12 @@ def update_status(docname: str):
         delivery_date = tracking_data.get('delivery_date')
         expected_delivery_date = tracking_data.get('expected_delivery_date')
         shipment_status = tracking_data.get('shipment_status')
-        tag = tracking_data.get('tag')
+        reported_tag = tracking_data.get('tag')
+        tag, proving_checkpoint = _most_advanced_tag(reported_tag, checkpoints)
+        if proving_checkpoint and tag == "Delivered" and not delivery_date:
+            # Top-level delivery_date is empty while the tag lags; the Delivered checkpoint
+            # carries the real time (same date format).
+            delivery_date = proving_checkpoint.get('date')
 
         latest_city = None
         latest_remark = None
@@ -978,6 +1004,27 @@ def update_status(docname: str):
                     frappe.get_traceback(), f"eShipz update_status: SO tracking status sync failed for {doc.name}"
                 )
 
+        # Move the Sales Order / Delivery Note state too (not just the Shipment and the
+        # SO tracking text), like the eShipz webhook does. A failure here must never
+        # fail the button — the Shipment itself is already updated.
+        order_updates = []
+        try:
+            from bombaysweets_customization.bombaysweets_customization.api import (
+                apply_eshipz_tag_to_orders,
+            )
+
+            delivered_on = None
+            if tag == "Delivered" and delivery_date:
+                try:
+                    delivered_on = datetime.strptime(delivery_date, "%a, %d %b %Y %H:%M:%S %Z").date()
+                except ValueError:
+                    delivered_on = None
+            order_updates = apply_eshipz_tag_to_orders(doc.name, tag, delivered_on)
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(), f"eShipz update_status: order state sync failed for {doc.name}"
+            )
+
         if delivery_date:
             delivery_date_erp = datetime.strptime(delivery_date, "%a, %d %b %Y %H:%M:%S %Z").strftime("%Y-%m-%d %H:%M:%S")
             doc.db_set('fsl_delivery_date', delivery_date_erp)
@@ -1001,6 +1048,8 @@ def update_status(docname: str):
             "fsl_expected_delivery_date": expected_delivery_date_erp if expected_delivery_date else None,
             "shipment_status": shipment_status,
             "tag": tag,
+            "reported_tag": reported_tag,
+            "order_updates": order_updates,
         }
     else:
         frappe.throw(_(

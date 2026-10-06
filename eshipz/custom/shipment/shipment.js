@@ -132,6 +132,7 @@ function _render_eshipz_buttons(frm) {
 				callback: function (res) {
 					if (res.message) {
 						frappe.show_alert({ message: __('Status Updated'), indicator: 'green' });
+						show_order_updates(res.message.order_updates || []);
 						frm.reload_doc();
 					}
 				}
@@ -154,4 +155,28 @@ function _render_eshipz_buttons(frm) {
 				.css({ background: '#1a5276', color: 'white', 'border-color': '#1a5276' });
 		}
 	}, 0);
+}
+
+
+// What "Update Status" did to the linked Sales Orders / Delivery Notes.
+function show_order_updates(updates) {
+	if (!updates.length) return;
+
+	const rows = updates.map((u) => {
+		const link = frappe.utils.get_form_link(u.doctype, u.name, true);
+		const text = {
+			applied: __('moved to {0}', [u.state]),
+			unchanged: __('already {0}', [u.state]),
+			skipped: __('not moved: {0}', [u.reason]),
+			failed: __('failed: {0}', [u.reason]),
+		}[u.outcome] || u.outcome;
+		const shopify = u.shopify_push ? ` · ${__('Shopify update queued')}` : '';
+		return `<li>${link} — ${frappe.utils.escape_html(text)}${shopify}</li>`;
+	});
+	const any_applied = updates.some((u) => u.outcome === 'applied');
+	frappe.msgprint({
+		title: __('Orders'),
+		indicator: any_applied ? 'green' : 'orange',
+		message: `<ul style="padding-left: 18px; margin: 0;">${rows.join('')}</ul>`,
+	});
 }
