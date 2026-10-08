@@ -287,6 +287,7 @@ def _get_shopify_order_number(doc):
     return frappe.db.get_value("Sales Order", so_names[0], "shopify_order_number")
 
 
+
 @frappe.whitelist()
 def fetch_available_services(docname: str):
     doc = frappe.get_doc('Shipment', docname)
@@ -974,23 +975,32 @@ def update_status(docname: str):
         latest_city = None
         latest_remark = None
         latest_tag = None
+        latest_subtag = None
 
         if checkpoints:
             latest_checkpoint = sorted(checkpoints, key=lambda x: datetime.strptime(x['date'], "%a, %d %b %Y %H:%M:%S %Z"), reverse=True)[0]
             latest_city = latest_checkpoint.get('city')
             latest_remark = latest_checkpoint.get('remark')
             latest_tag = latest_checkpoint.get('tag')
+            latest_subtag = latest_checkpoint.get('subtag')
 
             doc.db_set('fsl_latest_location', latest_city)
 
-        new_tracking_status = None
-        if tag == "Delivered":
-            doc.db_set('status', "Completed")
-            doc.db_set('tracking_status', "Delivered")
-            new_tracking_status = "Delivered"
-        elif tag == "InTransit":
-            doc.db_set('tracking_status', "In Progress")
-            new_tracking_status = "In Progress"
+        # The newest checkpoint is the truth when it says Return, even if the top-level tag lags.
+        if latest_tag in ("Return", "Rto") and tag not in ("Return", "Rto"):
+            tag = latest_tag
+
+        # Every tag now updates tracking_status (forward only) through the shared helper the
+        # eShipz webhook uses — so the button and the webhook always agree.
+        from bombaysweets_customization.bombaysweets_customization.api import (
+            apply_shipment_tracking_status,
+            eshipz_tracking_status,
+        )
+
+        new_status = eshipz_tracking_status(
+            tag, subtag=latest_subtag if latest_tag == tag else None, message=latest_remark
+        )
+        new_tracking_status = apply_shipment_tracking_status(doc.name, new_status, latest_remark)
 
         if new_tracking_status:
             try:
@@ -1019,7 +1029,7 @@ def update_status(docname: str):
                     delivered_on = datetime.strptime(delivery_date, "%a, %d %b %Y %H:%M:%S %Z").date()
                 except ValueError:
                     delivered_on = None
-            order_updates = apply_eshipz_tag_to_orders(doc.name, tag, delivered_on)
+            order_updates = apply_eshipz_tag_to_orders(doc.name, tag, delivered_on, latest_remark)
         except Exception:
             frappe.log_error(
                 frappe.get_traceback(), f"eShipz update_status: order state sync failed for {doc.name}"
@@ -1035,7 +1045,6 @@ def update_status(docname: str):
 
         last_update_received = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         doc.db_set('fsl_last_update_received', last_update_received)
-        doc.db_set('tracking_status_info', latest_remark)
 
         return {
             "latest_checkpoint": {
