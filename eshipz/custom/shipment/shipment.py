@@ -826,8 +826,10 @@ def create_rule_based_shipment(docname: str, item_data: str | None = None):
         "shipment_id": shipment_id,
     }
 
-@frappe.whitelist()
-def cancel_shipment(docname: str):
+def cancel_with_carrier(docname: str):
+    """Cancel the booking with eShipz ONLY — no ERPNext change. Raises with the carrier's message when
+    eShipz refuses or cannot be reached. Used by Cancel & Revise (which does its ERP part itself, all
+    or nothing) and by cancel_shipment below."""
     doc = frappe.get_doc('Shipment', docname)
 
     api_token = frappe.db.get_single_value('eShipz Settings', 'api_token')
@@ -858,27 +860,33 @@ def cancel_shipment(docname: str):
             "See Integration Request {0} for details."
         ).format(result_log.log_name))
 
-    if response.status_code == 200:
-        doc.db_set('tracking_url', "")
-        doc.db_set('status', "Cancelled")
-        doc.db_set('tracking_status', "")
-        doc.db_set('service_provider', "")
-        doc.db_set('tracking_status_info', "Cancelled")
-        doc.db_set('carrier_service', "")
-
-        # Clear SO reference before cancelling the doc so the link is gone before docstatus flips
-        _clear_shipment_references(docname)
-
-        try:
-            fresh = frappe.get_doc("Shipment", docname)
-            if fresh.docstatus == 1:
-                fresh.cancel()
-        except Exception:
-            frappe.log_error(frappe.get_traceback(), "eShipz: ERPNext Shipment cancel failed")
-    else:
+    if response.status_code != 200:
         frappe.throw(_(
             "Failed to cancel shipment: {0}. See Integration Request {1}."
         ).format(response.text, result_log.log_name))
+
+
+@frappe.whitelist()
+def cancel_shipment(docname: str):
+    doc = frappe.get_doc('Shipment', docname)
+    cancel_with_carrier(docname)
+
+    doc.db_set('tracking_url', "")
+    doc.db_set('status', "Cancelled")
+    doc.db_set('tracking_status', "")
+    doc.db_set('service_provider', "")
+    doc.db_set('tracking_status_info', "Cancelled")
+    doc.db_set('carrier_service', "")
+
+    # Clear SO reference before cancelling the doc so the link is gone before docstatus flips
+    _clear_shipment_references(docname)
+
+    try:
+        fresh = frappe.get_doc("Shipment", docname)
+        if fresh.docstatus == 1:
+            fresh.cancel()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "eShipz: ERPNext Shipment cancel failed")
 
 
 def _clear_shipment_references(shipment_name: str) -> None:
