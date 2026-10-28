@@ -1054,6 +1054,21 @@ def update_status(docname: str):
         last_update_received = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         doc.db_set('fsl_last_update_received', last_update_received)
 
+        # The courier reports the parcel lost / damaged / short: handled like a Final Return plus a Spoilage
+        # Entry (lost_parcel.py). Last, because it cancels the Shipment; never fails the button.
+        lost_parcel_result = None
+        try:
+            from bombaysweets_customization.bombaysweets_customization import lost_parcel
+
+            if lost_parcel.is_lost_signal(tag, latest_subtag if latest_tag == tag else None):
+                lost_parcel_result = lost_parcel.mark_lost(
+                    doc.name, f"Courier reported lost / damaged / short: {latest_remark or latest_subtag}"
+                )
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(), f"eShipz update_status: lost parcel handling failed for {doc.name}"
+            )
+
         return {
             "latest_checkpoint": {
                 "fsl_latest_location": latest_city,
@@ -1067,6 +1082,7 @@ def update_status(docname: str):
             "tag": tag,
             "reported_tag": reported_tag,
             "order_updates": order_updates,
+            "lost_parcel": lost_parcel_result,
         }
     else:
         frappe.throw(_(
